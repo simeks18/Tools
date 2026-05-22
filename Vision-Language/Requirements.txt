@@ -1,0 +1,59 @@
+# photo_layout — requirements
+# ────────────────────────────────────────────────────────────────────────────
+# Core (required)
+Pillow>=10.0.0
+
+# iPhone HEIC/HEIF support (optional but recommended)
+pillow-heif>=0.13.0
+
+# ── AI vision backends (install at least one) ────────────────────────────────
+
+# Option A: HuggingFace Transformers — SmolVLM2 (default, ~2 GB, CPU-friendly)
+#   pip install transformers torch accelerate
+transformers>=4.40.0
+torch>=2.0.0
+accelerate>=0.26.0
+
+# Option B: Ollama client — use with  ollama run qwen2.5vl:7b
+#   pip install ollama
+# ollama>=0.1.0
+
+# Option C: llama-cpp-python with LLaVA gguf (fastest if model on disk)
+#   CMAKE_ARGS="-DLLAMA_BLAS=ON" pip install llama-cpp-python
+# llama-cpp-python>=0.2.0
+
+# ── Palette extraction (optional, improves color accuracy) ──────────────────
+# colorthief>=0.2.1
+# opencv-python>=4.8.0
+
+# ── SVG overlay rasterization (optional, needed for SVG assets) ─────────────
+# cairosvg>=2.7.0        # best quality (needs libcairo system dep)
+# svglib>=1.5.0          # pure python fallback
+# reportlab>=4.0.0       # required by svglib
+
+# ── Diffusion asset generation (optional, --diffusion flag) ─────────────────
+# diffusers>=0.27.0
+# transformers>=4.40.0   # already listed above
+
+# ── Web asset search (optional, --web-assets flag) ───────────────────────────
+# No extra deps — uses stdlib urllib only.
+# Fetches from Wikimedia Commons (open license).
+
+# ── Install summary ──────────────────────────────────────────────────────────
+# Minimum (no AI):
+#   pip install Pillow pillow-heif
+#
+# Recommended CPU setup (SmolVLM2):
+#   pip install Pillow pillow-heif transformers torch accelerate
+#
+# Smarter model via Ollama (qwen2.5vl:7b Q4, ~4 GB):
+#   pip install Pillow pillow-heif ollama
+#   ollama run qwen2.5vl:7b
+#
+# Full feature set (SVG overlays + color extraction):
+#   pip install Pillow pillow-heif transformers torch accelerate \
+#               colorthief cairosvg
+#
+# With diffusion asset generation:
+#   pip install Pillow pillow-heif transformers torch accelerate \
+#               diffusers colorthief cairosvg
