@@ -26,7 +26,7 @@ from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
 except ImportError:
     print("Pillow is required. Install with:  pip install Pillow")
     sys.exit(1)
@@ -41,19 +41,19 @@ except ImportError:
 # ── constants ────────────────────────────────────────────────────────────────
 
 SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp",
-                  ".heic", ".heif"}   # iPhone formats (requires pillow-heif)
+                  ".heic", ".heif"}   # iPhone formats require pillow-heif
 
 # physical dimensions in inches
-PHOTO_W_IN  = 2.0    # target photo width
-PHOTO_H_IN  = 3.0    # target photo height
+PHOTO_W_IN  = 2.0
+PHOTO_H_IN  = 3.0
 SHEET_4X6_W = 4.0
 SHEET_4X6_H = 6.0
 LETTER_W    = 8.5
 LETTER_H    = 11.0
 
 DEFAULT_DPI  = 300
-DEFAULT_COLS = 4   # for letter mode
-DEFAULT_ROWS = 3   # for letter mode  (4×3 = 12 photos per sheet)
+DEFAULT_COLS = 4
+DEFAULT_ROWS = 3
 MARGIN_IN    = 0.125   # 1/8 inch margin between photos and edges
 
 
@@ -63,17 +63,28 @@ def inches_to_px(inches, dpi):
     return int(round(inches * dpi))
 
 
+def open_image(path: Path) -> Image.Image | None:
+    """Open an image, applying EXIF rotation correction. Returns None on failure."""
+    try:
+        img = Image.open(path)
+        img = ImageOps.exif_transpose(img)   # fix phone portrait rotation
+        return img.convert("RGB")
+    except Exception as e:
+        print(f"  WARNING: skipping {path.name} — {e}", file=sys.stderr)
+        return None
+
+
 def fit_and_pad(img: Image.Image, target_w_px: int, target_h_px: int) -> Image.Image:
     """Scale image to fill target box (maintain aspect ratio), then pad with white."""
     src_w, src_h = img.size
-    ratio = min(target_w_px / src_w, target_h_px / src_h)
-    new_w = int(round(src_w * ratio))
-    new_h = int(round(src_h * ratio))
+    ratio  = min(target_w_px / src_w, target_h_px / src_h)
+    new_w  = int(round(src_w * ratio))
+    new_h  = int(round(src_h * ratio))
     resized = img.resize((new_w, new_h), Image.LANCZOS)
 
     canvas = Image.new("RGB", (target_w_px, target_h_px), (255, 255, 255))
-    x_off = (target_w_px - new_w) // 2
-    y_off = (target_h_px - new_h) // 2
+    x_off  = (target_w_px - new_w) // 2
+    y_off  = (target_h_px - new_h) // 2
     canvas.paste(resized, (x_off, y_off))
     return canvas
 
@@ -81,38 +92,31 @@ def fit_and_pad(img: Image.Image, target_w_px: int, target_h_px: int) -> Image.I
 def list_images(folder: str) -> list[Path]:
     """Return image files in folder (non-recursive, sorted)."""
     p = Path(folder)
-    files = sorted(
+    return sorted(
         f for f in p.iterdir()
         if f.is_file() and f.suffix.lower() in SUPPORTED_EXTS
     )
-    return files
 
 
 # ── mode: 4x6 (two 2x3 side-by-side) ────────────────────────────────────────
 
-def make_4x6(img_path: Path, out_dir: Path, dpi: int) -> Path:
-    """Place one photo twice (or same photo mirrored) side-by-side on a 4x6 sheet."""
+def make_4x6(img_path: Path, out_dir: Path, dpi: int) -> Path | None:
+    """Place one photo twice side-by-side on a 4x6 sheet. Returns output path or None on error."""
+    img = open_image(img_path)
+    if img is None:
+        return None
+
     sheet_w = inches_to_px(SHEET_4X6_W, dpi)
     sheet_h = inches_to_px(SHEET_4X6_H, dpi)
-
-    photo_w = inches_to_px(PHOTO_W_IN, dpi)
-    photo_h = inches_to_px(PHOTO_H_IN, dpi)
-
-    # margin between the two photos (centre gap) and outer edges
     margin  = inches_to_px(MARGIN_IN, dpi)
 
-    # usable width for two photos
-    usable_w = sheet_w - 3 * margin   # left + middle + right margins
-    cell_w   = usable_w // 2
-    usable_h = sheet_h - 2 * margin
+    # two cells side-by-side with left / middle / right margins
+    cell_w  = (sheet_w - 3 * margin) // 2
+    cell_h  = sheet_h - 2 * margin
 
-    img = Image.open(img_path).convert("RGB")
-    cell = fit_and_pad(img, cell_w, usable_h)
-
-    sheet = Image.new("RGB", (sheet_w, sheet_h), (255, 255, 255))
-    # left photo
+    cell   = fit_and_pad(img, cell_w, cell_h)
+    sheet  = Image.new("RGB", (sheet_w, sheet_h), (255, 255, 255))
     sheet.paste(cell, (margin, margin))
-    # right photo
     sheet.paste(cell, (margin + cell_w + margin, margin))
 
     out_path = out_dir / (img_path.stem + "_4x6.jpg")
@@ -121,28 +125,37 @@ def make_4x6(img_path: Path, out_dir: Path, dpi: int) -> Path:
 
 
 def process_4x6(input_folder: str, output_folder: str, dpi: int,
-                progress_cb=None) -> int:
+                progress_cb=None) -> tuple[int, int]:
+    """Returns (processed, skipped)."""
     images = list_images(input_folder)
     if not images:
-        return 0
+        return 0, 0
+
     out_dir = Path(output_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    processed, skipped = 0, 0
     for i, img_path in enumerate(images):
-        make_4x6(img_path, out_dir, dpi)
+        result = make_4x6(img_path, out_dir, dpi)
+        if result:
+            processed += 1
+        else:
+            skipped += 1
         if progress_cb:
             progress_cb(i + 1, len(images), img_path.name)
 
-    return len(images)
+    return processed, skipped
 
 
 # ── mode: letter (tile 2x3 photos on 8.5×11) ─────────────────────────────────
 
 def process_letter(input_folder: str, output_folder: str, dpi: int,
-                   cols: int, rows: int, progress_cb=None) -> int:
+                   cols: int, rows: int,
+                   progress_cb=None) -> tuple[int, int]:
+    """Returns (sheets_written, skipped_images)."""
     images = list_images(input_folder)
     if not images:
-        return 0
+        return 0, 0
 
     out_dir = Path(output_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -151,37 +164,43 @@ def process_letter(input_folder: str, output_folder: str, dpi: int,
     sheet_h_px = inches_to_px(LETTER_H, dpi)
     margin_px  = inches_to_px(MARGIN_IN, dpi)
 
-    per_sheet = cols * rows
-    # calculate cell size from available space divided by grid
     cell_w = (sheet_w_px - (cols + 1) * margin_px) // cols
     cell_h = (sheet_h_px - (rows + 1) * margin_px) // rows
 
-    total  = len(images)
-    sheets = math.ceil(total / per_sheet)
-    done   = 0
+    per_sheet = cols * rows
+    total     = len(images)
+    n_sheets  = math.ceil(total / per_sheet)
 
-    for sheet_idx in range(sheets):
+    done, skipped, sheet_count = 0, 0, 0
+
+    for sheet_idx in range(n_sheets):
         sheet = Image.new("RGB", (sheet_w_px, sheet_h_px), (255, 255, 255))
         batch = images[sheet_idx * per_sheet : (sheet_idx + 1) * per_sheet]
+        sheet_has_content = False
 
         for slot, img_path in enumerate(batch):
-            row = slot // cols
-            col = slot % cols
-            x = margin_px + col * (cell_w + margin_px)
-            y = margin_px + row * (cell_h + margin_px)
-
-            img  = Image.open(img_path).convert("RGB")
-            cell = fit_and_pad(img, cell_w, cell_h)
-            sheet.paste(cell, (x, y))
-
+            img = open_image(img_path)
             done += 1
             if progress_cb:
                 progress_cb(done, total, img_path.name)
+            if img is None:
+                skipped += 1
+                continue
 
-        out_path = out_dir / f"sheet_{sheet_idx + 1:03d}.jpg"
-        sheet.save(out_path, "JPEG", quality=95, dpi=(dpi, dpi))
+            row  = slot // cols
+            col  = slot % cols
+            x    = margin_px + col * (cell_w + margin_px)
+            y    = margin_px + row * (cell_h + margin_px)
+            cell = fit_and_pad(img, cell_w, cell_h)
+            sheet.paste(cell, (x, y))
+            sheet_has_content = True
 
-    return sheets
+        if sheet_has_content:
+            out_path = out_dir / f"sheet_{sheet_count + 1:03d}.jpg"
+            sheet.save(out_path, "JPEG", quality=95, dpi=(dpi, dpi))
+            sheet_count += 1
+
+    return sheet_count, skipped
 
 
 # ── GUI ──────────────────────────────────────────────────────────────────────
@@ -239,19 +258,25 @@ class App(tk.Tk):
                                      width=4)
         self.rows_spin.grid(row=0, column=5, sticky="w", **pad)
 
+        # ── heif notice ──
+        heif_text = "✓ HEIC/HEIF supported" if _HEIF_AVAILABLE else "⚠ HEIC not available (pip install pillow-heif)"
+        heif_color = "green" if _HEIF_AVAILABLE else "orange"
+        ttk.Label(self, text=heif_text, foreground=heif_color).grid(
+            row=4, column=0, columnspan=3, padx=10, pady=(2, 0))
+
         # ── progress ──
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(self, variable=self.progress_var,
                                             maximum=100, length=420)
-        self.progress_bar.grid(row=4, column=0, columnspan=3, padx=10, pady=(8, 2))
+        self.progress_bar.grid(row=5, column=0, columnspan=3, padx=10, pady=(6, 2))
 
         self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(self, textvariable=self.status_var, foreground="gray").grid(
-            row=5, column=0, columnspan=3, padx=10, pady=(0, 4))
+            row=6, column=0, columnspan=3, padx=10, pady=(0, 4))
 
         # ── run ──
         self.run_btn = ttk.Button(self, text="▶  Run", command=self._run, width=14)
-        self.run_btn.grid(row=6, column=0, columnspan=3, pady=(4, 10))
+        self.run_btn.grid(row=7, column=0, columnspan=3, pady=(4, 10))
 
         self._toggle_mode()
 
@@ -296,13 +321,17 @@ class App(tk.Tk):
 
         try:
             if mode == "4x6":
-                n = process_4x6(inp, out, dpi, progress_cb=cb)
-                msg = f"Done! Created {n} 4×6 output file(s) in:\n{out}"
+                processed, skipped = process_4x6(inp, out, dpi, progress_cb=cb)
+                msg = f"Done!\n\n{processed} file(s) created in:\n{out}"
+                if skipped:
+                    msg += f"\n\n{skipped} file(s) skipped (unreadable or unsupported)."
             else:
                 cols = self.cols_var.get()
                 rows = self.rows_var.get()
-                n = process_letter(inp, out, dpi, cols, rows, progress_cb=cb)
-                msg = f"Done! Created {n} letter sheet(s) in:\n{out}"
+                sheets, skipped = process_letter(inp, out, dpi, cols, rows, progress_cb=cb)
+                msg = f"Done!\n\n{sheets} sheet(s) created in:\n{out}"
+                if skipped:
+                    msg += f"\n\n{skipped} file(s) skipped (unreadable or unsupported)."
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
             self.run_btn.config(state="normal")
@@ -325,7 +354,8 @@ def cli():
     )
     parser.add_argument("--mode",   choices=["4x6", "letter"],
                         help="Layout mode (required for headless run)")
-    parser.add_argument("--input",  metavar="DIR", help="Input folder (images only, no subfolders)")
+    parser.add_argument("--input",  metavar="DIR",
+                        help="Input folder (images only, no subfolders)")
     parser.add_argument("--output", metavar="DIR", help="Output folder")
     parser.add_argument("--dpi",    type=int, default=DEFAULT_DPI,
                         help=f"Output DPI (default {DEFAULT_DPI})")
@@ -335,18 +365,22 @@ def cli():
                         help=f"Rows on letter sheet (default {DEFAULT_ROWS})")
     args = parser.parse_args()
 
-    # if any required CLI arg is missing, launch GUI instead
+    # if any required arg is missing, launch GUI instead
     if not args.mode or not args.input or not args.output:
         app = App()
-        # pre-fill whatever was provided
         if args.input:  app.input_var.set(args.input)
         if args.output: app.output_var.set(args.output)
-        if args.mode:   app.mode_var.set(args.mode); app._toggle_mode()
-        if args.dpi:    app.dpi_var.set(args.dpi)
-        if args.cols:   app.cols_var.set(args.cols)
-        if args.rows:   app.rows_var.set(args.rows)
+        if args.mode:
+            app.mode_var.set(args.mode)
+            app._toggle_mode()
+        app.dpi_var.set(args.dpi)
+        app.cols_var.set(args.cols)
+        app.rows_var.set(args.rows)
         app.mainloop()
         return
+
+    if not _HEIF_AVAILABLE:
+        print("NOTE: pillow-heif not installed — HEIC/HEIF files will be skipped.")
 
     def cb(done, total, name):
         pct = int(done / total * 100)
@@ -354,13 +388,18 @@ def cli():
         print(f"\r[{bar}] {pct:3d}%  {name[:30]:<30}", end="", flush=True)
 
     print(f"Mode: {args.mode}  |  DPI: {args.dpi}  |  Input: {args.input}")
+
     if args.mode == "4x6":
-        n = process_4x6(args.input, args.output, args.dpi, progress_cb=cb)
-        print(f"\nDone — {n} file(s) written to {args.output}")
+        processed, skipped = process_4x6(args.input, args.output, args.dpi, progress_cb=cb)
+        print(f"\nDone — {processed} file(s) written to {args.output}")
+        if skipped:
+            print(f"Skipped {skipped} unreadable/unsupported file(s).")
     else:
-        n = process_letter(args.input, args.output, args.dpi,
-                           args.cols, args.rows, progress_cb=cb)
-        print(f"\nDone — {n} sheet(s) written to {args.output}")
+        sheets, skipped = process_letter(args.input, args.output, args.dpi,
+                                         args.cols, args.rows, progress_cb=cb)
+        print(f"\nDone — {sheets} sheet(s) written to {args.output}")
+        if skipped:
+            print(f"Skipped {skipped} unreadable/unsupported file(s).")
 
 
 if __name__ == "__main__":
