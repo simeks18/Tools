@@ -31,9 +31,17 @@ except ImportError:
     print("Pillow is required. Install with:  pip install Pillow")
     sys.exit(1)
 
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    _HEIF_AVAILABLE = True
+except ImportError:
+    _HEIF_AVAILABLE = False
+
 # ── constants ────────────────────────────────────────────────────────────────
 
-SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp",
+                  ".heic", ".heif"}   # iPhone formats (requires pillow-heif)
 
 # physical dimensions in inches
 PHOTO_W_IN  = 2.0    # target photo width
